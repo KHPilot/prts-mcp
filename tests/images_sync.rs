@@ -747,3 +747,153 @@ async fn custom_source_covers_pagination_baseline_download_and_restart() {
     assert_eq!(active_generation(&dir).unwrap(), generation);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[cfg(feature = "image-reuse-lab")]
+#[tokio::test]
+async fn rebaseline_reuses_complete_shards_and_survives_old_generation_removal() {
+    let (world, mut index) = build_world();
+    let dir = temp_images_dir("rebaseline-reuse");
+    let transport = FakeTransport {
+        world: world.clone(),
+    };
+    assert_eq!(
+        sync_images(&dir, &transport, opts(false))
+            .await
+            .status
+            .as_str(),
+        "updated"
+    );
+    let prior = active_generation(&dir).unwrap();
+    let new_version = "26-04-01-00-00-00_d3";
+    index["baselineVersion"] = json!("26-03-01-00-00-00_d2");
+    index["currentVersion"] = json!(new_version);
+    let prefix = format!(
+        "https://github.com/3aKHP/arknights-data-pipeline/releases/download/images-{new_version}"
+    );
+    let delta = format!("images-delta-{new_version}.zip");
+    let mut releases = world.releases.clone();
+    releases.insert(
+        0,
+        json!({"tag_name": format!("images-{new_version}"), "created_at":"2026-04-01T00:00:00Z", "assets": [
+            {"name":"index.json", "browser_download_url":format!("{prefix}/index.json")},
+            {"name":delta, "browser_download_url":format!("{prefix}/{delta}")}
+        ]}),
+    );
+    // No new-baseline assets exist: success requires all four shards to be reused.
+    let mut assets = world.assets.clone();
+    assets.insert(
+        format!("{prefix}/index.json"),
+        serde_json::to_vec(&index).unwrap(),
+    );
+    assets.insert(format!("{prefix}/{delta}"), zip_of(&[]));
+    let next = std::sync::Arc::new(World {
+        releases,
+        assets,
+        downloads: Mutex::new(Vec::new()),
+        fail_all: false,
+    });
+    let reused_file = prior.join("chararts/char_002_amiya#1.large.png");
+    std::fs::write(&reused_file, b"corrupted").unwrap();
+    let failed = sync_images(
+        &dir,
+        &FakeTransport {
+            world: next.clone(),
+        },
+        opts(false),
+    )
+    .await;
+    assert_eq!(failed.status.as_str(), "offline_fallback");
+    assert_eq!(active_generation(&dir).unwrap(), prior);
+    std::fs::write(&reused_file, png("amiya#1:large")).unwrap();
+    next.downloads.lock().unwrap().clear();
+    let result = sync_images(
+        &dir,
+        &FakeTransport {
+            world: next.clone(),
+        },
+        opts(false),
+    )
+    .await;
+    assert_eq!(result.status.as_str(), "updated", "{result:?}");
+    assert_eq!(next.downloads.lock().unwrap().len(), 2);
+    let active = active_generation(&dir).unwrap();
+    assert_ne!(active, prior);
+    std::fs::remove_dir_all(prior).unwrap();
+    assert_eq!(
+        std::fs::read(active.join("chararts/char_002_amiya#1.large.png")).unwrap(),
+        png("amiya#1:large")
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn same_version_rebaseline_index_is_not_fetched() {
+    let (world, mut index) = build_world();
+    let dir = temp_images_dir("same-version-rebaseline");
+    sync_images(
+        &dir,
+        &FakeTransport {
+            world: world.clone(),
+        },
+        opts(false),
+    )
+    .await;
+    let before = load_meta(&dir).unwrap();
+    index["baselineVersion"] = json!("26-02-01-00-00-00_d1");
+    let mut assets = world.assets.clone();
+    assets.insert("https://github.com/3aKHP/arknights-data-pipeline/releases/download/images-26-03-01-00-00-00_d2/index.json".into(),serde_json::to_vec(&index).unwrap());
+    let changed = std::sync::Arc::new(World {
+        releases: world.releases.clone(),
+        assets,
+        downloads: Mutex::new(Vec::new()),
+        fail_all: false,
+    });
+    let result = sync_images(
+        &dir,
+        &FakeTransport {
+            world: changed.clone(),
+        },
+        opts(false),
+    )
+    .await;
+    assert_eq!(result.status.as_str(), "up_to_date");
+    assert!(changed.downloads.lock().unwrap().is_empty());
+    assert_eq!(load_meta(&dir).unwrap(), before);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn sentinel_tags_require_matching_index_version() {
+    for tag in [
+        "images-26-03-01-00-00-00_d2-r2",
+        "images-sentinel-26-03-01-00-00-00_d2",
+    ] {
+        let (world, index) = build_world();
+        let mut releases = world.releases.clone();
+        releases.insert(0,json!({"tag_name":tag,"created_at":"2026-04-01T00:00:00Z", "assets":[{"name":"index.json","browser_download_url":"https://lab/index.json"}]}));
+        let mut assets = world.assets.clone();
+        assets.insert(
+            "https://lab/index.json".into(),
+            serde_json::to_vec(&index).unwrap(),
+        );
+        let changed = std::sync::Arc::new(World {
+            releases,
+            assets,
+            downloads: Mutex::new(Vec::new()),
+            fail_all: false,
+        });
+        let dir = temp_images_dir("sentinel-mismatch");
+        let result = sync_images(
+            &dir,
+            &FakeTransport {
+                world: changed.clone(),
+            },
+            opts(false),
+        )
+        .await;
+        assert!(result.error.unwrap().contains("does not match"));
+        assert!(active_generation(&dir).is_none());
+        assert_eq!(changed.downloads.lock().unwrap().len(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

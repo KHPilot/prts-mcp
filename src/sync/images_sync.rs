@@ -413,6 +413,14 @@ async fn sync_images_locked(
                 if shard_file.is_empty() {
                     continue;
                 }
+                #[cfg(feature = "image-reuse-lab")]
+                if let Some(prior) = gen_dir.as_ref() {
+                    if super::images_reuse::copy_verified_shard(prior, &staging, &index, shard_key)
+                        .await?
+                    {
+                        continue;
+                    }
+                }
                 let shard_zip = staging.join(format!(".{shard_key}.zip"));
                 transport
                     .download_file(
