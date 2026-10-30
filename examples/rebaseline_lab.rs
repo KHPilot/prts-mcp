@@ -96,9 +96,14 @@ impl Transport for Replay {
             return Err(TransportError::Network("fixture asset escapes root".into()));
         }
         let mut input =
-            std::fs::File::open(path).map_err(|e| TransportError::Network(e.to_string()))?;
-        let mut output =
-            std::fs::File::create(dest).map_err(|e| TransportError::Network(e.to_string()))?;
+            std::fs::File::open(&path).map_err(|e| TransportError::Network(e.to_string()))?;
+        let link_cached_zip = self.fixture["link_cached_zips"].as_bool() == Some(true)
+            && path.extension().is_some_and(|extension| extension == "zip");
+        let mut output = if link_cached_zip {
+            None
+        } else {
+            Some(std::fs::File::create(dest).map_err(|e| TransportError::Network(e.to_string()))?)
+        };
         use std::io::{Read, Write};
         let mut buffer = vec![0; 1024 * 1024];
         let mut hash = Sha256::new();
@@ -110,11 +115,18 @@ impl Transport for Replay {
             if size == 0 {
                 break;
             }
-            output
-                .write_all(&buffer[..size])
-                .map_err(|e| TransportError::Network(e.to_string()))?;
+            if let Some(output) = output.as_mut() {
+                output
+                    .write_all(&buffer[..size])
+                    .map_err(|e| TransportError::Network(e.to_string()))?;
+            }
             hash.update(&buffer[..size]);
             bytes += size as u64;
+        }
+        if link_cached_zip {
+            // Experiment cache only: archives are read-only to sync; unlinking
+            // staging does not remove the immutable cache entry.
+            std::fs::hard_link(&path, dest).map_err(|e| TransportError::Network(e.to_string()))?;
         }
         self.bytes.fetch_add(bytes, Ordering::Relaxed);
         self.requests.fetch_add(1, Ordering::Relaxed);
