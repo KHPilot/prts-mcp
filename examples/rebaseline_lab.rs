@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
-use prts_mcp_rust::sync::images_sync::{sync_images, ImagesSyncOpts};
+use prts_mcp_rust::config::DataSource;
+use prts_mcp_rust::sync::images_sync::{sync_images_with_source, ImagesSyncOpts};
 use prts_mcp_rust::sync::transport::{DownloadStats, Transport, TransportError};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -95,13 +96,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         requests: AtomicU64::new(0),
     };
     let start = std::time::Instant::now();
-    let result = sync_images(
+    let source = DataSource::parse(Some(
+        replay.fixture["source"]
+            .as_str()
+            .ok_or("fixture requires source owner/repo")?,
+    ))?;
+    if source.is_default() {
+        return Err("experiment requires custom source".into());
+    }
+    let result = sync_images_with_source(
         Path::new(&args[2]),
         &replay,
         ImagesSyncOpts {
             include_original: args.get(3).is_some_and(|x| x == "original"),
             force_check: true,
         },
+        &source,
     )
     .await;
     println!(
