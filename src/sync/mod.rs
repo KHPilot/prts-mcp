@@ -16,3 +16,6 @@ pub mod source_guard;
 pub mod transport;
 pub mod types;
 pub mod validation;
+
+#[cfg(feature = "image-reuse-lab")]
+mod images_reuse;
