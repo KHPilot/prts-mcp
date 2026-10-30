@@ -34,6 +34,55 @@ impl Transport for Replay {
         let relative = self.fixture["assets"][url]
             .as_str()
             .ok_or_else(|| TransportError::AssetNotFound(url.into()))?;
+        if relative.starts_with("http://127.0.0.1:") {
+            let endpoint = reqwest::Url::parse(relative)
+                .map_err(|e| TransportError::Network(e.to_string()))?;
+            if endpoint.host_str() != Some("127.0.0.1") || !endpoint.username().is_empty() {
+                return Err(TransportError::Network(
+                    "replay HTTP must be loopback".into(),
+                ));
+            }
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(900))
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|e| TransportError::Network(e.to_string()))?;
+            let mut response = client
+                .get(relative)
+                .send()
+                .await
+                .and_then(reqwest::Response::error_for_status)
+                .map_err(|e| TransportError::Network(e.to_string()))?;
+            let mut output = tokio::fs::File::create(dest)
+                .await
+                .map_err(|e| TransportError::Network(e.to_string()))?;
+            use tokio::io::AsyncWriteExt;
+            let mut hash = Sha256::new();
+            let mut bytes = 0;
+            while let Some(chunk) = response
+                .chunk()
+                .await
+                .map_err(|e| TransportError::Network(e.to_string()))?
+            {
+                output
+                    .write_all(&chunk)
+                    .await
+                    .map_err(|e| TransportError::Network(e.to_string()))?;
+                hash.update(&chunk);
+                bytes += chunk.len() as u64;
+            }
+            output
+                .flush()
+                .await
+                .map_err(|e| TransportError::Network(e.to_string()))?;
+            self.bytes.fetch_add(bytes, Ordering::Relaxed);
+            self.requests.fetch_add(1, Ordering::Relaxed);
+            return Ok(DownloadStats {
+                bytes,
+                sha256: format!("{:x}", hash.finalize()),
+            });
+        }
         let path = self
             .root
             .join(relative)
