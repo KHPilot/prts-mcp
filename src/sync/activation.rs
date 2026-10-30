@@ -290,6 +290,23 @@ fn resolve_inside_lexical(root: &Path, name: &str) -> Option<PathBuf> {
 /// containment, tmp-file-then-rename per entry, and leftover-tmp cleanup on
 /// failure. Unsafe member paths abort the extraction.
 pub fn safe_extract_zip(zip_path: &Path, local_root: &Path) -> Result<(), SyncError> {
+    safe_extract_zip_filter(zip_path, local_root, |_| false)
+}
+
+#[cfg(feature = "image-reuse-lab")]
+pub(crate) fn safe_extract_zip_preserving(
+    zip_path: &Path,
+    local_root: &Path,
+    preserved: &std::collections::BTreeSet<PathBuf>,
+) -> Result<(), SyncError> {
+    safe_extract_zip_filter(zip_path, local_root, |path| preserved.contains(path))
+}
+
+fn safe_extract_zip_filter(
+    zip_path: &Path,
+    local_root: &Path,
+    preserve: impl Fn(&Path) -> bool,
+) -> Result<(), SyncError> {
     let root = std::path::absolute(local_root).unwrap_or_else(|_| local_root.to_path_buf());
     let file = std::fs::File::open(zip_path)?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| SyncError::Message(e.to_string()))?;
@@ -305,6 +322,11 @@ pub fn safe_extract_zip(zip_path: &Path, local_root: &Path) -> Result<(), SyncEr
             let name = entry.name().to_string();
             let dest = resolve_inside_lexical(&root, &name)
                 .ok_or_else(|| SyncError::Message(format!("Unsafe zip member path: {name}")))?;
+            if preserve(&dest) {
+                // Still decode/drain the entry so ZIP CRC failures are observed.
+                std::io::copy(&mut entry, &mut std::io::sink())?;
+                continue;
+            }
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent)?;
             }

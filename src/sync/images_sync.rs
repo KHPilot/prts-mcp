@@ -414,12 +414,16 @@ async fn sync_images_locked(
                     continue;
                 }
                 #[cfg(feature = "image-reuse-lab")]
-                if let Some(prior) = gen_dir.as_ref() {
-                    if super::images_reuse::copy_verified_shard(prior, &staging, &index, shard_key)
-                        .await?
-                    {
-                        continue;
+                let reused = match gen_dir.as_ref() {
+                    Some(prior) => {
+                        super::images_reuse::copy_verified_shard(prior, &staging, &index, shard_key)
+                            .await?
                     }
+                    None => super::images_reuse::ReusedShard::default(),
+                };
+                #[cfg(feature = "image-reuse-lab")]
+                if reused.complete {
+                    continue;
                 }
                 let shard_zip = staging.join(format!(".{shard_key}.zip"));
                 transport
@@ -430,6 +434,13 @@ async fn sync_images_locked(
                     )
                     .await
                     .map_err(|e| SyncError::Message(format!("{e} downloading {shard_file}")))?;
+                #[cfg(feature = "image-reuse-lab")]
+                super::activation::safe_extract_zip_preserving(
+                    &shard_zip,
+                    &staging,
+                    &reused.files,
+                )?;
+                #[cfg(not(feature = "image-reuse-lab"))]
                 safe_extract_zip(&shard_zip, &staging)?;
                 let _ = tokio::fs::remove_file(&shard_zip).await;
             }
