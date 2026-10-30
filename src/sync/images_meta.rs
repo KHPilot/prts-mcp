@@ -135,7 +135,10 @@ pub fn parse_index(data: &Value) -> Option<ImagesIndex> {
     if !data.is_object() {
         return None;
     }
-    if data.get("schemaVersion").and_then(|v| v.as_str()) != Some(SCHEMA_VERSION) {
+    if data.get("schemaVersion").and_then(|v| v.as_str()) != Some(SCHEMA_VERSION)
+        && !(cfg!(feature = "image-sharding-lab")
+            && data.get("schemaVersion").and_then(|v| v.as_str()) == Some("akdp-images/v2"))
+    {
         return None;
     }
     let mut artworks = BTreeMap::new();
