@@ -276,6 +276,11 @@ mod tests {
         // Unfamiliar schema version is rejected.
         let mut future = sample_index();
         future["schemaVersion"] = Value::String("akdp-images/v2".into());
+        assert_eq!(
+            parse_index(&future).is_some(),
+            cfg!(feature = "image-sharding-lab")
+        );
+        future["schemaVersion"] = Value::String("akdp-images/v999".into());
         assert!(parse_index(&future).is_none());
         assert!(parse_index(&Value::Null).is_none());
     }

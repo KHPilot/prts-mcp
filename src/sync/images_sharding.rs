@@ -124,6 +124,7 @@ async fn run(
     reuse: bool,
 ) -> Result<String, String> {
     super::source_guard::ensure(root, source)?;
+    cleanup_staging(&root.join(".releases"))?;
     let releases = discovery::list_releases(t, source.owner(), source.repo(), 10_000)
         .await
         .ok_or("release discovery failed")?;
@@ -293,7 +294,9 @@ async fn run(
         meta["generation_root"] = json!(format!(".releases/{name}"));
         images_meta::save_meta(root, &meta).map_err(|e| e.to_string())?;
         // Keep failed-transfer cache for resume, release it only after activation.
-        std::fs::remove_dir_all(&cache).map_err(|e| e.to_string())?;
+        if let Err(error) = std::fs::remove_dir_all(&cache) {
+            eprintln!("[sharding-lab] cache cleanup: {error}");
+        }
         super::primitives::prune_old_trees(
             &rel,
             &std::collections::HashSet::from([rel.join(&name)]),
@@ -307,4 +310,42 @@ async fn run(
         let _ = std::fs::remove_dir_all(stage);
     }
     result
+}
+
+fn cleanup_staging(root: &Path) -> Result<(), String> {
+    if !root.exists() {
+        return Ok(());
+    }
+    for item in std::fs::read_dir(root).map_err(|e| e.to_string())? {
+        let item = item.map_err(|e| e.to_string())?;
+        let name = item.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(".v2-") && name.ends_with(".tmp") {
+            let kind = item.file_type().map_err(|e| e.to_string())?;
+            if !kind.is_dir() {
+                return Err("unexpected staging entry type".into());
+            }
+            std::fs::remove_dir_all(item.path()).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn abandoned_staging_cleanup_is_owned_and_repeatable() {
+        let root = std::env::temp_dir().join(format!(
+            "sharding-cleanup-{}",
+            crate::sync::primitives::random_suffix()
+        ));
+        for name in [".v2-abandoned.tmp", "v2-active", ".other.tmp"] {
+            std::fs::create_dir_all(root.join(name)).unwrap();
+        }
+        super::cleanup_staging(&root).unwrap();
+        super::cleanup_staging(&root).unwrap();
+        assert!(!root.join(".v2-abandoned.tmp").exists());
+        assert!(root.join("v2-active").exists());
+        assert!(root.join(".other.tmp").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
