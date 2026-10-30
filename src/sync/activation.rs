@@ -299,7 +299,12 @@ pub(crate) fn safe_extract_zip_preserving(
     local_root: &Path,
     preserved: &std::collections::BTreeSet<PathBuf>,
 ) -> Result<(), SyncError> {
-    safe_extract_zip_filter(zip_path, local_root, |path| preserved.contains(path))
+    safe_extract_zip_filter(zip_path, local_root, |path| {
+        !preserved.is_empty()
+            && path
+                .canonicalize()
+                .is_ok_and(|resolved| preserved.contains(&resolved))
+    })
 }
 
 fn safe_extract_zip_filter(

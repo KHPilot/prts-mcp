@@ -113,6 +113,16 @@ mod tests {
         assert_eq!(std::fs::read(staging.join("a.png")).unwrap(), b"verified");
         assert_eq!(std::fs::read(staging.join("b.png")).unwrap(), b"new");
         assert_eq!(std::fs::read(prior.join("a.png")).unwrap(), b"verified");
+        #[cfg(unix)]
+        {
+            let alias = root.join("alias");
+            std::os::unix::fs::symlink(&staging, &alias).unwrap();
+            std::fs::remove_file(staging.join("b.png")).unwrap();
+            super::super::activation::safe_extract_zip_preserving(&archive, &alias, &reused.files)
+                .unwrap();
+            assert_eq!(std::fs::read(staging.join("a.png")).unwrap(), b"verified");
+            assert_eq!(std::fs::read(staging.join("b.png")).unwrap(), b"new");
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 }
