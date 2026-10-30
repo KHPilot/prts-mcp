@@ -165,6 +165,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if source.is_default() {
         return Err("experiment requires custom source".into());
     }
+    #[cfg(feature = "image-sharding-lab")]
+    if replay.fixture["channel"].as_str() == Some("v2") {
+        let result = prts_mcp_rust::sync::images_sharding::sync(
+            Path::new(&args[2]),
+            &replay,
+            &source,
+            args.get(3).is_some_and(|x| x == "original"),
+            cfg!(feature = "image-reuse-lab"),
+        )
+        .await;
+        println!(
+            "{}",
+            json!({"result":result,"download_bytes":replay.bytes.load(Ordering::Relaxed),"downloads":replay.requests.load(Ordering::Relaxed),"seconds":start.elapsed().as_secs_f64()})
+        );
+        if result.is_err() {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let result = sync_images_with_source(
         Path::new(&args[2]),
         &replay,

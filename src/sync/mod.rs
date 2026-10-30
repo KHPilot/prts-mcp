@@ -19,3 +19,6 @@ pub mod validation;
 
 #[cfg(feature = "image-reuse-lab")]
 mod images_reuse;
+
+#[cfg(feature = "image-sharding-lab")]
+pub mod images_sharding;
